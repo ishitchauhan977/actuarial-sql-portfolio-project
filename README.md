@@ -1,88 +1,74 @@
 # ActurRisk: Actuarial Pricing, Reserving & Risk SQL Engine
 
-This portfolio project is designed to demonstrate advanced **SQL database engineering** and data analysis mapped directly to the core syllabi of actuarial professional exams: **IFoA CS1 (Actuarial Statistics 1)**, **CM1 (Actuarial Mathematics 1)**, and **CB2 (Business Economics)**.
+I built this to combine two things I've been working on actuarial exam prep and SQL. Instead of doing basic CRUD stuff, I set up a small database that mimics a life insurance portfolio, then wrote queries that actually do the math actuaries care about: discounting cash flows, working with mortality tables, expected values, loadings on premiums, the kind of calculations you'd normally do in Excel or R, but pushed into SQL instead.
 
-Rather than simple CRUD queries, this database simulates a life insurance policy portfolio and applies core actuarial mathematical models (Equation of Value discounting, mortality table calculations, statistical expected values, and cost-load margins) directly inside relational database queries.
+### Survival probabilities and pricing
+Working with life table notation — survival probabilities (${}_np_x$), mortality rates ($q_x$), deferred mortality probabilities pulled straight from standard life tables. From there I priced a 3-year term life assurance policy using the Equation of Value: get the expected present value of future claim payouts, then back into a Net Single Premium using compound interest discounting:
 
+$$v^t = (1 + i)^{-t}$$
+
+### Expected losses and experience checks
+Calculated expected claim losses ($E[\text{Claims}]$) and their spread across the portfolio:
+
+$$E[\text{Claims}] = \text{Sum Assured} \times q_x$$
+$$\text{Var}(\text{Claims}) = \text{Sum Assured}^2 \times q_x(1 - q_x)$$
+
+Also ran an actual vs expected deaths check comparing how many policyholders actually died against what the mortality model predicted, which is basically a mini experience study.
+
+### Premium loadings
+Compared gross office premiums against the net pure premium (the pure mortality cost) to see how much of the premium is expense loading vs. profit margin. Also looked at how loadings shift across risk classes e.g. standard vs. substandard to see how insurers price differential risk.
 ---
 
-## 📌 Syllabus & Exam Topics Covered
+## Database schema
 
-### 1. CM1 (Actuarial Mathematics)
-*   **Life Table Notation**: Calculating survival probabilities (${}_n p_x$), mortality rates ($q_x$), and deferred mortality probabilities from standard lifetables.
-*   **Pricing via Equation of Value**: Calculating the Expected Present Value (EPV) of future claim payouts and pricing a 3-Year Term Life Assurance policy using Net Single Premium (NSP) formulas with compound interest discounting:
-    $$v^t = (1 + i)^{-t}$$
-
-### 2. CS1 (Actuarial Statistics)
-*   **Mathematical Expectation & Variance**: Calculating expected claim losses ($E[X]$) and standard deviation bounds ($\sqrt{\text{Var}(X)}$) across a portfolio:
-    $$E[Claims] = \text{Sum Assured} \times q_x$$
-    $$\text{Var}(Claims) = \text{Sum Assured}^2 \times q_x(1 - q_x)$$
-*   **Experience Study**: Auditing actual claimed policyholders against probability models (Actual vs. Expected deaths study).
-
-### 3. CB2 (Business Economics)
-*   **Premium Cost Loadings**: Analyzing gross office premiums charged against net pure premiums (mortality cost) to inspect expense loadings, cost recovery, and profit margins.
-*   **Price Differentiation**: Analyzing how premium structures load risk differentially across demographic risk classes (e.g. standard vs. substandard risk loadings).
-
----
-
-## 🗄️ Database Schema Design
-
-The schema is written in [schema.sql](file:///C:/Users/ishit/.gemini/antigravity/scratch/actuarial-sql-portfolio-clean/schema.sql) and consists of three core tables optimized for analytical query execution:
-
+Three tables, kept simple on purpose so the queries stay readable. Full DDL is in [schema.sql](schema.sql).
 ```
-                  +-----------------------+
-                  |  mortality_life_table |
-                  +-----------------------+
-                  | age (PK)              |
-                  | gender (PK)           |
-                  | is_smoker (PK)        |
-                  | qx, ex                |
-                  +-----------+-----------+
-                              | (Composite Underwriting Link)
-                              |
-                              v
-                  +-----------+-----------+
-                  |        policies       |
-                  +-----------------------+
-                  | policy_id (PK)        |
-                  | holder_name           |
-                  | holder_age, gender    |
-                  | is_smoker             |
-                  | sum_assured           |
-                  | annual_premium        |
-                  | risk_class, status    |
-                  +-----------+-----------+
-                              | (1-to-Many Policy Claim Link)
-                              |
-                              v
-                  +-----------+-----------+
-                  |         claims        |
-                  +-----------------------+
-                  | claim_id (PK)         |
-                  | policy_id (FK)        |
-                  | claim_amount          |
-                  | accident_date         |
-                  | report_delay_days     |
-                  +-----------------------+
-```
+            +-----------------------+
+              |  mortality_life_table |
+              +-----------------------+
+              | age (PK)              |
+              | gender (PK)           |
+              | is_smoker (PK)        |
+              | qx, ex                |
+              +-----------+-----------+
+                          |
+                          v
+              +-----------+-----------+
+              |        policies       |
+              +-----------------------+
+              | policy_id (PK)        |
+              | holder_name           |
+              | holder_age, gender    |
+              | is_smoker             |
+              | sum_assured           |
+              | annual_premium        |
+              | risk_class, status    |
+              +-----------+-----------+
+                          |
+                          v
+              +-----------+-----------+
+              |         claims        |
+              +-----------------------+
+              | claim_id (PK)         |
+              | policy_id (FK)        |
+              | claim_amount          |
+              | accident_date         |
+              | report_delay_days     |
+              +-----------------------+
 
-### Table Dictionary:
-1.  **`mortality_life_table`**: Houses standard mortality probabilities ($q_x$) and life expectancies ($e_x$) indexed by age, gender, and smoking status.
-2.  **`policies`**: Houses underwritten policy contracts with underwriting risk classifications (Preferred, Standard, Substandard) and annual gross premiums.
-3.  **`claims`**: Logs claim events resulting from death (status changes to 'Claimed'), including report delays.
+### 
+`mortality_life_table` holds standard mortality rates ($q_x$) and life expectancies ($e_x$) by age, gender, and smoker status — this is the reference table everything else joins against. `policies` is the actual book of business: who's insured, their risk class (preferred/standard/substandard), sum assured, premium. `claims` logs what happened when someone in that book died — links back to `policies` via `policy_id`, and I track `report_delay_days` since claim reporting lag is something that comes up a lot in reserving.
 
-### Optimizations:
-*   `idx_policies_risk`: Composite index on `policies(holder_age, holder_gender, is_smoker)` to speed up multi-key experience joins with the mortality table.
-*   `idx_claims_policy`: Index on foreign key `claims(policy_id)` to speed up claim audit aggregations.
+I added two indexes once the experience-study queries started getting slow: one composite index on `policies(holder_age, holder_gender, is_smoker)` since that's the join key against the mortality table, and one on `claims(policy_id)` for the claim aggregations. Not strictly necessary at this data volume, but good practice.
 
 ---
 
-## 📈 SQL Case Studies
+## SQL case studies
 
-All case study queries are coded in [actuarial_queries.sql](file:///C:/Users/ishit/.gemini/antigravity/scratch/actuarial-sql-portfolio-clean/actuarial_queries.sql).
+All queries live in [actuarial_queries.sql](actuarial_queries.sql).
 
-### Case Study 1 [CM1]: Life Table Analysis & Survival Probabilities
-Computes a 3-year survival probability ($_{3}p_{x}$) for cohorts of age 25, 45, and 65 (split by gender and smoking status) by joining the mortality table on progressive age increments.
+### 1. Survival probabilities across cohorts
+Joins the mortality table against itself on progressive age increments to get a 3-year survival probability ($_3p_x$) for cohorts at age 25, 45, and 65, split by gender and smoker status.
 
 ```sql
 SELECT 
@@ -102,8 +88,8 @@ ORDER BY starting_age, m0.is_smoker;
 
 ---
 
-### Case Study 2 [CM1]: Net Single Premium (NSP) Term Assurance Pricing
-Prices a 3-year term assurance policy with a Sum Assured of $100,000 using compound interest discounting at $4\%$ ($i = 0.04$). The query calculates the Expected Present Value (EPV) of future claim payouts at each year of exposure.
+### 2. Pricing a term assurance policy
+Prices a 3-year term assurance with a $100,000 sum assured, discounted at 4% ($i = 0.04$), by working out the expected present value of the claim payout in each year of exposure.
 
 ```sql
 WITH term_pricing AS (
@@ -131,8 +117,8 @@ ORDER BY age, is_smoker;
 
 ---
 
-### Case Study 3 [CS1]: Expected Value & Variance Experience Study
-Computes the theoretical Expected Claims cost ($E[X]$) and Standard Deviation bounds ($\sqrt{\text{Var}(X)}$) using mortality rates and sum assured coverage. It compares these expected values against the actual incurred claim totals.
+### 3. Actual vs. expected claims
+Works out expected claims ($E[X]$) and the standard deviation around that estimate for each age band, then compares it against what actually got claimed — a basic experience study.
 
 ```sql
 WITH policy_expectations AS (
@@ -165,8 +151,8 @@ ORDER BY 1;
 
 ---
 
-### Case Study 4 [CB2]: Cost Loading & Underwriting Margin Analysis
-Measures the administrative and profit "loading factors" built into gross office premiums relative to the base net premium (expected mortality claims costs).
+### 4. Premium loading by risk class
+Looks at how much of the gross office premium is loading (admin cost + profit margin) on top of the net pure premium, broken down by risk class and smoker status.
 
 ```sql
 WITH pricing_data AS (
@@ -192,18 +178,12 @@ ORDER BY loading_margin_percentage DESC;
 
 ---
 
-## 🛠️ How to Run the Database & Analysis
+## Running it
 
-This project requires **only Python** to build and run. It has zero external package dependencies.
+Just Python, no external packages needed.
 
-1.  Clone this repository or navigate to your project directory.
-2.  Run the python runner script in your command line:
-    ```bash
-    python run_analysis.py
-    ```
+```bash
+python run_analysis.py
+```
 
-### What this script does:
-1.  Creates a clean SQLite database file named `actuarial.db`.
-2.  Executes `schema.sql` DDL to construct the tables.
-3.  Simulates and seeds the database, exporting the fully generated SQL statements as a static file `seed_data.sql` (for full repository transparency).
-4.  Runs all four case studies and outputs the results as formatted tables in your command line.
+It builds a fresh `actuarial.db` SQLite file, runs `schema.sql` to set up the tables, seeds the data (dumping the seed statements to `seed_data.sql` so you can see exactly what was inserted), then runs all four queries and prints the results to the terminal.
